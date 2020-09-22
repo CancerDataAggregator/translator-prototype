@@ -71,10 +71,10 @@ class Query:
         self.unnest_dict = make_unnest_dictionary(schema)
 
     def translate(self, select: Select, where: Where):
-        from_components = [self.table]
-        for c in where.columns():
+        unnest = set()
+        for c in select.columns + where.columns():
             if c in self.unnest_dict:
-                from_components += [f"unnest({self.unnest_dict.get(c)})"]
+                unnest.add(self.unnest_dict.get(c))
 
-        from_clause = ", ".join(from_components)
+        from_clause = ", ".join([self.table] + [f"unnest({u})" for u in list(unnest)])
         return f"SELECT {select} FROM {from_clause} WHERE {where}"
