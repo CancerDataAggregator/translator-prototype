@@ -21,25 +21,31 @@ class Value:
             return str(self.s)
 
 
-class Where:
-    def __init__(self, left, operator, right):
-        self.left = left
+class Condition:
+    def __init__(self, col: Column, operator: str, value: Value):
+        self.left = col
         self.operator = operator
-        self.right = right
+        self.right = value
 
     def columns(self):
         _cols = []
         if isinstance(self.left, Column):
             _cols += [self.left.s]
-        elif isinstance(self.left, Where):
+        elif isinstance(self.left, Condition):
             _cols += self.left.columns()
 
         if isinstance(self.right, Column):
             _cols += [self.right.s]
-        elif isinstance(self.right, Where):
+        elif isinstance(self.right, Condition):
             _cols += self.right.columns()
 
         return _cols
+
+    def And(self, right: 'Condition'):
+        return Condition(self, "AND", right)
+
+    def Or(self, right: 'Condition'):
+        return Condition(self, "OR", right)
 
     def __str__(self):
         return f"({self.left} {self.operator} {self.right})"
@@ -70,11 +76,11 @@ class Query:
         schema = json.load(open("schema.json", "r"))["schema"]
         self.unnest_dict = make_unnest_dictionary(schema)
 
-    def translate(self, select: Select, where: Where):
+    def translate(self, select: Select, condition: Condition):
         unnest = set()
-        for c in select.columns + where.columns():
+        for c in select.columns + condition.columns():
             if c in self.unnest_dict:
                 unnest.add(self.unnest_dict.get(c))
 
         from_clause = ", ".join([self.table] + [f"unnest({u})" for u in list(unnest)])
-        return f"SELECT {select} FROM {from_clause} WHERE {where}"
+        return f"SELECT {select} FROM {from_clause} WHERE {condition}"
