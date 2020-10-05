@@ -1,5 +1,5 @@
 import json
-from typing import Union
+from typing import Union, List
 
 
 class Column:
@@ -19,6 +19,23 @@ class Value:
             return f"'{self.s}'"
         else:
             return str(self.s)
+
+
+class Dataset:
+    def __init__(self, table: str, schema: dict):
+        self.table = table
+        self.unnest_dict = make_unnest_dictionary(schema)
+
+
+def make_unnest_dictionary(schema: dict):
+    unnest_dictionary = {}
+    for v in schema["fields"]:
+        if v["type"] != "RECORD":
+            continue
+
+        for field in v["fields"]:
+            unnest_dictionary[field["name"]] = v["name"]
+    return unnest_dictionary
 
 
 class Condition:
@@ -50,37 +67,12 @@ class Condition:
     def __str__(self):
         return f"({self.left} {self.operator} {self.right})"
 
-
-class Select:
-    def __init__(self, columns):
-        self.columns = columns
-
-    def __str__(self):
-        return ", ".join(self.columns)
-
-
-def make_unnest_dictionary(schema: dict):
-    unnest_dictionary = {}
-    for v in schema["fields"]:
-        if v["type"] != "RECORD":
-            continue
-
-        for field in v["fields"]:
-            unnest_dictionary[field["name"]] = v["name"]
-    return unnest_dictionary
-
-
-class Query:
-    def __init__(self, table: str):
-        self.table = table
-        schema = json.load(open("schema.json", "r"))["schema"]
-        self.unnest_dict = make_unnest_dictionary(schema)
-
-    def translate(self, select: Select, condition: Condition):
+    def translate(self, columns: List[Column], dataset: Dataset):
         unnest = set()
-        for c in select.columns + condition.columns():
-            if c in self.unnest_dict:
-                unnest.add(self.unnest_dict.get(c))
+        for c in columns + self.columns():
+            if c in dataset.unnest_dict:
+                unnest.add(dataset.unnest_dict.get(c))
 
-        from_clause = ", ".join([self.table] + [f"unnest({u})" for u in list(unnest)])
-        return f"SELECT {select} FROM {from_clause} WHERE {condition}"
+        select = ", ".join(columns)
+        from_clause = ", ".join([dataset.table] + [f"unnest({u})" for u in list(unnest)])
+        return f"SELECT {select} FROM {from_clause} WHERE {self}"
