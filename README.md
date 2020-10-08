@@ -12,3 +12,10 @@ The prototype will be used to study
 
 Please see this [notebook](CDA-MVP-Query-examples.ipynb) to see how some of the
 CDA MVP queries can be written and how ISB's nested tables can be queried.
+
+How to experiment:
+
+1. Clone this repository
+2. `pip install -e .` 
+3. `jupyter notebook`
+4. Run the example notebook below
