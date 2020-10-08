@@ -12,6 +12,12 @@ c2 = Condition(Column('project_id'), 'like', Value('TCGA%'))
 c3 = Condition(Column('figo_stage'), '=', Value('Stage IIIC'))
 
 columns = ['case_id', 'age_at_index', 'gender', 'race', 'project_id', 'figo_stage']
+condition = \
+    Condition(Column('age_at_index'), '>=', Value(50)).And(
+    Condition(Column('project_id'), 'like', Value('TCGA%'))).And(
+    Condition(Column('figo_stage'), '=', Value('Stage IIIC'))))
+
+
 print(c1.And(c2).And(c3).translate(columns, dataset))
 
 
@@ -19,3 +25,5 @@ from google.cloud import bigquery
 
 client = bigquery.Client()
 query_job = client.query(c1.And(c2).And(c3).translate(columns, dataset))
+for row in query_job:
+    print(row)
