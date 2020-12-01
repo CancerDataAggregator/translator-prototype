@@ -1,32 +1,28 @@
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.fasterxml.jackson.databind.ObjectMapper;
-
-import java.io.File;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class Main {
 
     interface Node {
-        Collection<String> columns();
     }
     static class Column implements Node {
         public final String name;
         Column(String name) {
             this.name = name;
         }
-        public Collection<String> columns() {
-            return Collections.singleton(this.name);
-        }
         public String toString() {
+            if (parent() != null) {
+                return "_" + name;
+            }
             return name;
+        }
+        public String parent() {
+            var parts = name.split("\\.");
+            if (parts.length > 1) {
+                return parts[0];
+            }
+            return null;
         }
     }
     static class Value implements Node {
@@ -34,122 +30,100 @@ public class Main {
         Value(Object value) {
             this.value = value;
         }
-        public Collection<String> columns() {
-            return Collections.emptySet();
-        }
 
         public String toString() {
             if (value instanceof String) {
                 return "'%s'".formatted(value);
+            } else if (value == null) {
+                return "NULL";
             }
             return value.toString();
         }
     }
-    static class Where implements Node {
+    static class Condition implements Node {
         public final Node left;
         public final String operator;
         public final Node right;
 
-        public Where(Node left, String operator, Node right) {
-            this.left = left;
+        public Condition(Node column, String operator, Node value) {
+            this.left = column;
             this.operator = operator;
-            this.right = right;
+            this.right = value;
         }
 
-        public Collection<String> columns() {
-            var cols = new ArrayList<String>();
-            cols.addAll(left.columns());
-            cols.addAll(right.columns());
-            return cols;
+        public Condition(String column, String operator, int value) {
+            this(new Column(column), operator, new Value(value));
         }
+
+        public Condition(String column, String operator, String value) {
+            this(new Column(column), operator, new Value(value));
+        }
+
+        Condition And(Condition right) {
+            return new Condition(this, "AND", right);
+        }
+
+        Condition Or(Condition right) {
+            return new Condition(this, "OR", right);
+        }
+
+        private Stream<String> unnestRecurse(Node node) {
+            if (node instanceof Column) {
+                return Stream.of(((Column) node).parent());
+            } else if (node instanceof Condition) {
+                return ((Condition) node).columnsToUnnest();
+            }
+            return Stream.empty();
+        }
+
+        Stream<String> columnsToUnnest() {
+            return Stream.concat(unnestRecurse(left), unnestRecurse(right));
+        }
+
         @Override
         public String toString() {
             return "(%s %s %s)".formatted(left, operator, right);
         }
     }
 
-    static class Select {
-        public final Collection<String> columns;
-        Select(String... columns) {
-            this.columns = Arrays.asList(columns);
-        }
-        public String toString() {
-            return String.join(", ", columns);
-        }
-    }
-
-    static class Field {
-        public String description;
-        public String mode;
-        public String name;
-        public String type;
-        public Field[] fields;
-    }
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    static class Schema {
-        public Field[] fields;
-    }
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    static class SchemaRoot {
-        public Schema schema;
-    }
-
-    static Map<String, String> makeUnnestDictionary() throws IOException {
-        var schemaFile = new File("queryt/schema.json");
-        var root = new ObjectMapper().readValue(schemaFile, SchemaRoot.class);
-        var unnestDictionary = new HashMap<String, String>();
-        for (Field v : root.schema.fields) {
-            if (v.type.equals("RECORD")) {
-                for (Field field : v.fields) {
-                    unnestDictionary.put(field.name, v.name);
-                }
-            }
-        }
-        return unnestDictionary;
-    }
-
-    static class Query {
+    static class Dataset {
         public final String table;
-        public final Select select;
-        public final Where where;
+        public final Condition condition;
 
-        public Query(String table, Select select, Where where) {
+        public Dataset(String table, Condition condition) {
             this.table = table;
-            this.select = select;
-            this.where = where;
+            this.condition = condition;
         }
 
-        String translate(Map<String, String> unnestDict) {
+        String sql() {
             var fromClause =
                     Stream.concat(Stream.of(table),
-                            Stream.concat(select.columns.stream(), where.columns().stream())
-                                    .filter(unnestDict::containsKey)
-                                    .map(unnestDict::get)
+                            condition.columnsToUnnest()
+                                    .filter(Objects::nonNull)
                                     .distinct()
-                                    .map("unnest(%s)"::formatted))
+                                    .map("UNNEST(%1$s) AS _%1$s"::formatted))
                                     .collect(Collectors.joining(", "));
 
-            return "SELECT %s FROM %s WHERE %s".formatted(select, fromClause, where);
+            return "SELECT * FROM %s WHERE %s".formatted(fromClause, condition);
         }
     }
 
-    public static void main(String[] args) throws IOException {
+    static final String expected = "SELECT * FROM gdc-bq-sample.gdc_metadata.r26_clinical, UNNEST(demographic) AS _demographic, " +
+            "UNNEST(project) AS _project, UNNEST(diagnoses) AS _diagnoses " +
+            "WHERE (((_demographic.age_at_index >= 50) AND (_project.project_id = 'TCGA-OV')) AND (_diagnoses.figo_stage = 'Stage IIIC'))";
 
-        var unnestDict = makeUnnestDictionary();
+    public static void main(String[] args) {
+        var c1 = new Condition("demographic.age_at_index", ">=", 50);
+        var c2 = new Condition("project.project_id", "=", "TCGA-OV");
+        var c3 = new Condition("diagnoses.figo_stage", "=", "Stage IIIC");
 
-        var w1 = new Where(new Column("age_at_index"), ">=", new Value(50));
-        var w2 = new Where(new Column("project_id"), "like", new Value("TCGA%"));
-        var w3 = new Where(new Column("figo_stage"), "=", new Value("Stage IIIC"));
+        var c = c1.And(c2).And(c3);
 
-        var w4 = new Where(w1, "and", w2);
-        var w5 = new Where(w4, "and", w3);
+        var dataset = new Dataset("gdc-bq-sample.gdc_metadata.r26_clinical", c);
 
-        var s = new Select("case_id", "age_at_index", "gender", "race", "project_id", "figo_stage");
-
-        var q = new Query("gdc-bq-sample.gdc_metadata.r24_clinical", s, w5);
-
-        System.out.println(q.translate(unnestDict));
+        var sql = dataset.sql();
+        if (!sql.equals(expected)) {
+            System.out.println("incorrect sql" + sql);
+        }
     }
 }
